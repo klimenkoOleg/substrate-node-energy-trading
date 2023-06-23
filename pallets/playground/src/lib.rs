@@ -11,28 +11,36 @@ use pallet_best_path::{best_path, traits::BestPath, types::ProviderPairOperation
 use pallet_scheduler_datetime::traits::*;
 use sp_runtime::{traits::Dispatchable};
 
+//#[cfg(not(feature = "std"))]
+//use alloc::vec;
+//
+//#[cfg(feature = "std")]
+//use std::vec;
+
+
+
 pub type CallOf<T> = <T as Config>::Call;
 pub type PalletsOriginOf<T> = <<T as frame_system::Config>::Origin as OriginTrait>::PalletsOrigin;
 
 /// Pallet used to test integration with other third party pallets such as `pallet_best_path` and `pallet_schedule_datetime`.
-/// 
+///
 /// The aim is to provide usage of other pallets, either by calling them (pallet_best_path/pallet_schedule_datetime)
 /// or letting them call us back (via pallet_schedule_datetime).
 /// As such, this pallet circumnavigates Origin security checks imposed by the original pallets ;).
-/// 
+///
 /// Usage:
 /// - setup pallet_best_path as per instructions in https://github.com/konrads/pallet-best_path
 /// - whitelist the OCW user
 /// - `make populate-keys`
 /// - `submit_monitored_pairs()` - delegates to pallet_best_path (can also do from pallet_best_path)
 /// - `schedule_monitoring()` - delegates to pallet_scheduler_datetime, which calls back `lookup_price()`
-/// 
+///
 /// __NOTE:__ pallet_schedule_datetime requires PalletOrigin setup. Research for that was based on democracy and referenda pallets,
 /// both of which schedule internally. Current implementation delegates to Root to perform scheduled calls, should consider changing to original caller.
 #[frame_support::pallet]
 pub mod pallet {
 	use super::*;
-	
+
 	#[pallet::error]
 	pub enum Error<T> {
 		/// Indicates failure in scheduling of the call
@@ -114,15 +122,45 @@ pub mod pallet {
 			Ok(())
 		}
 
+		/// Submits call to schedule_datetime pallet, requests scheduling of lookup_price() extrinsic
+		#[pallet::weight(10_000)]
+		pub fn schedule_energy(origin: OriginFor<T>, source: T::Currency, target: T::Currency) -> DispatchResult {
+			ensure_signed(origin)?;
+			let mut schedule_id = source.as_ref().to_vec();
+			schedule_id.push(b'-');
+			schedule_id.extend(source.as_ref().iter());
+
+			let start = DateTime { year: 2022, month: 3, day: 29, hour: 6, minute: 1, second: 29, ms: 162 };  // 1:59:999 after start, ie. 2:58:00:000 to go
+
+			let mut list = Vec::<(Frequency, u32)>::new();
+			list.push((Frequency::Second, 10));
+
+
+			let schedule = Schedule {
+				start: start.clone(),
+				items: list, //vec![(Frequency::Second, 10)],
+				end: None
+			};
+
+			T::Scheduler::schedule_named(
+				schedule_id,
+				schedule,
+				200,
+				frame_system::RawOrigin::Root.into(), // FIXME: change to Signed root, eg. along the lines of: frame_system::RawOrigin::Signed(who).into(),
+				MaybeHashed::Value(Call::lookup_price { source, target }.into()),
+			).map_err(|_| Error::<T>::FailedToSchedule)?;
+			Ok(())
+		}
+
 		/// Called by the scheduler_datetime pallet
 		#[pallet::weight(10_000)]
 		pub fn lookup_price(origin: OriginFor<T>, source: T::Currency, target: T::Currency) -> DispatchResult {
 			ensure_signed_or_root(origin)?;
-			let source_str = sp_std::str::from_utf8(&source.as_ref()).unwrap();
-			let target_str = sp_std::str::from_utf8(&target.as_ref()).unwrap();
-			let price_path = T::BestPath::get_price_path(source.clone(), target.clone());
-			log::info!(target: "runtime::playground", "looked up price {} -> {}: {:?}", source_str, target_str, &price_path);
-			Self::deposit_event(Event::PricePathLookup(source, target, price_path));
+//			let source_str = sp_std::str::from_utf8(&source.as_ref()).unwrap();
+//			let target_str = sp_std::str::from_utf8(&target.as_ref()).unwrap();
+//			let price_path = T::BestPath::get_price_path(source.clone(), target.clone());
+			log::info!(target: "runtime::playground", "looked up price");
+			Self::deposit_event(Event::PricePathLookup(source, target, None));
 			Ok(())
 		}
 	}
